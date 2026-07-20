@@ -1,0 +1,101 @@
+name: Build f小手机 APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "app/**"
+      - "components/**"
+      - "custom-apps/**"
+      - "data/**"
+      - "lib/**"
+      - "public/**"
+      - "styles/**"
+      - "package.json"
+      - "package-lock.json"
+      - "next.config.mjs"
+      - "capacitor.config.ts"
+      - "scripts/prepare-capacitor-build.mjs"
+      - ".github/workflows/build-android-apk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Install Capacitor build dependencies
+        run: npm install --no-save @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest
+
+      - name: Prepare offline static build
+        run: node scripts/prepare-capacitor-build.mjs
+
+      - name: Build bundled web application
+        env:
+          NEXT_PUBLIC_SELF_HOSTED_MODE: "true"
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run build
+
+      - name: Verify static output
+        run: test -f out/index.html
+
+      - name: Create Android project
+        run: npx cap add android
+
+      - name: Copy web bundle into Android
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log
+
+      - name: Upload Gradle diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-diagnostics
+          path: gradle-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "f小手机-debug.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: f小手机-debug-apk
+          path: f小手机-debug.apk
+          if-no-files-found: error
+          retention-days: 30
